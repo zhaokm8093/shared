@@ -1,6 +1,6 @@
 {
   "name": "@zhaokm8093/shared",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Shared utilities for bed and pillow",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
