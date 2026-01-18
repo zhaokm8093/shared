@@ -1,0 +1,80 @@
+name: Shared Package CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify exports
+        run: |
+          node -e "
+            const s = require('./dist');
+            const exports = Object.keys(s);
+            console.log('Total exports:', exports.length);
+
+            // Verify key exports exist
+            const required = ['Cache', 'createCache', 'ValidationError', 'ValidationErrors',
+                             'validateId', 'normalizeError', 'createErrorHandler'];
+            const missing = required.filter(e => !exports.includes(e));
+
+            if (missing.length > 0) {
+              console.error('Missing exports:', missing);
+              process.exit(1);
+            }
+            console.log('All required exports present');
+          "
+
+      - name: Test functionality
+        run: |
+          node -e "
+            const { Cache, normalizeError, validateParams, ValidationErrors } = require('./dist');
+
+            // Test Cache
+            const cache = new Cache();
+            cache.set('test', 'value');
+            if (cache.get('test') !== 'value') throw new Error('Cache test failed');
+            console.log('✓ Cache test passed');
+
+            // Test normalizeError
+            const err = new Error('test');
+            const normalized = normalizeError(err);
+            if (!normalized.stack) throw new Error('normalizeError test failed');
+            console.log('✓ normalizeError test passed');
+
+            // Test ValidationErrors
+            try {
+              validateParams({ a: -1, b: '' }, {
+                a: { type: 'number', min: 0 },
+                b: { required: true, type: 'string', min: 1 }
+              });
+            } catch (e) {
+              if (!(e instanceof ValidationErrors) || e.errors.length !== 2) {
+                throw new Error('ValidationErrors test failed');
+              }
+              console.log('✓ ValidationErrors test passed');
+            }
+
+            console.log('All tests passed!');
+          "
