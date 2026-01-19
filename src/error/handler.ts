@@ -2,33 +2,40 @@ import { AppError, ErrorHandlerResult, ErrorCodeRangeConfig } from './types';
 
 /**
  * Sensitive keywords that should be filtered from error messages
+ * Merged from bed and pillow implementations
  */
 const SENSITIVE_KEYWORDS = [
-  // Database
-  'sql', 'database', 'query', 'mysql', 'postgres', 'mongodb', 'redis',
+  // Database related
+  'sql', 'database', 'query', 'db', 'mysql', 'postgres', 'mongodb', 'redis',
   'select', 'insert', 'update', 'delete', 'drop', 'table', 'column',
-  // Stack trace
-  'stack', 'stacktrace', 'exception', 'error:', 'at line', 'traceback',
+  // Stack trace related
+  'stack', 'stacktrace', 'exception', 'error:', 'at line', 'in file',
+  'traceback', 'backtrace',
   // System paths
-  '/var/', '/usr/', '/home/', '/opt/', 'node_modules', 'src/',
-  // Secrets
+  '/var/', '/usr/', '/home/', '/opt/', 'c:\\', 'd:\\',
+  'node_modules', 'src/', 'internal/',
+  // Sensitive info
   'password', 'token', 'secret', 'key', 'credential', 'auth',
-  // Framework
-  'express', 'react', 'axios', 'nginx', 'gin', 'gorm',
-  // Internal errors
-  'panic', 'fatal', 'assertion', 'undefined', 'nil pointer',
-  // Network
-  'localhost', '127.0.0.1', ':3000', ':8080',
+  // Framework/server info
+  'express', 'gin', 'django', 'flask', 'nginx', 'apache', 'gorm',
+  'node', 'golang', 'python', 'java', 'react', 'axios',
+  // Internal error indicators
+  'panic', 'fatal', 'assertion', 'undefined', 'null pointer', 'nil pointer',
+  'segmentation fault', 'memory',
+  // IP/ports
+  'localhost', '127.0.0.1', '0.0.0.0', ':3000', ':8080', ':5432',
+  // Other sensitive
+  'admin', 'root', 'system', 'config', 'env',
 ];
 
 /**
  * Path patterns that indicate internal information
  */
 const PATH_PATTERNS = [
-  /[a-z]:\\[\w\\]+/i,              // Windows path
-  /\/[\w\/]+\.(js|ts|tsx|jsx|go)/i, // File path
-  /line\s+\d+/i,                    // Line number
-  /at\s+[\w.]+\s+\(/i,              // Stack frame
+  /[a-z]:\\[\w\\]+/i, // Windows path (C:\path\to\file)
+  /\/[\w\/]+\.(js|ts|tsx|jsx|go|py)/i, // Unix file path
+  /line\s+\d+/i, // "line 123"
+  /at\s+[\w.]+\s+\(/i, // Stack frame "at funcName ("
 ];
 
 /**
