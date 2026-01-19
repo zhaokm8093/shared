@@ -14,6 +14,10 @@ export type {
 } from './api';
 
 export {
+  SUCCESS_CODE,
+  ErrorCode,
+  ErrorMessages,
+  isAuthError,
   isSuccessResponse,
   extractData,
 } from './api';

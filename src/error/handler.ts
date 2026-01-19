@@ -2,30 +2,71 @@ import { AppError, ErrorHandlerResult, ErrorCodeRangeConfig } from './types';
 
 /**
  * Sensitive keywords that should be filtered from error messages
- * Merged from bed and pillow implementations
+ * Using word boundary patterns to avoid false positives (e.g., "selective" matching "select")
  */
-const SENSITIVE_KEYWORDS = [
-  // Database related
-  'sql', 'database', 'query', 'db', 'mysql', 'postgres', 'mongodb', 'redis',
-  'select', 'insert', 'update', 'delete', 'drop', 'table', 'column',
+const SENSITIVE_KEYWORD_PATTERNS: RegExp[] = [
+  // Database related - exact word matches
+  /\bsql\b/i,
+  /\bdatabase\b/i,
+  /\bquery\b/i,
+  /\bmysql\b/i,
+  /\bpostgres\b/i,
+  /\bmongodb\b/i,
+  /\bredis\b/i,
+  /\bgorm\b/i,
+  // SQL keywords - require word boundaries
+  /\bselect\s+\*/i, // "select *" (actual SQL)
+  /\binsert\s+into\b/i, // "insert into" (actual SQL)
+  /\bupdate\s+\w+\s+set\b/i, // "update table set" (actual SQL)
+  /\bdelete\s+from\b/i, // "delete from" (actual SQL)
+  /\bdrop\s+(table|database)\b/i, // "drop table/database"
   // Stack trace related
-  'stack', 'stacktrace', 'exception', 'error:', 'at line', 'in file',
-  'traceback', 'backtrace',
-  // System paths
-  '/var/', '/usr/', '/home/', '/opt/', 'c:\\', 'd:\\',
-  'node_modules', 'src/', 'internal/',
-  // Sensitive info
-  'password', 'token', 'secret', 'key', 'credential', 'auth',
+  /\bstacktrace\b/i,
+  /\btraceback\b/i,
+  /\bbacktrace\b/i,
+  /\berror:\s/i, // "error: " with colon and space
+  /\bat line\b/i,
+  /\bin file\b/i,
+  // Sensitive info - exact word matches
+  /\bpassword\b/i,
+  /\btoken\b/i,
+  /\bsecret\b/i,
+  /\bcredential\b/i,
   // Framework/server info
-  'express', 'gin', 'django', 'flask', 'nginx', 'apache', 'gorm',
-  'node', 'golang', 'python', 'java', 'react', 'axios',
+  /\bexpress\b/i,
+  /\bdjango\b/i,
+  /\bflask\b/i,
+  /\bnginx\b/i,
+  /\bapache\b/i,
+  /\baxios\b/i,
   // Internal error indicators
-  'panic', 'fatal', 'assertion', 'undefined', 'null pointer', 'nil pointer',
-  'segmentation fault', 'memory',
-  // IP/ports
-  'localhost', '127.0.0.1', '0.0.0.0', ':3000', ':8080', ':5432',
-  // Other sensitive
-  'admin', 'root', 'system', 'config', 'env',
+  /\bpanic\b/i,
+  /\bfatal\b/i,
+  /\bassertion\b/i,
+  /\bnull pointer\b/i,
+  /\bnil pointer\b/i,
+  /\bsegmentation fault\b/i,
+  // IP/ports - specific patterns
+  /\blocalhost\b/i,
+  /127\.0\.0\.1/,
+  /0\.0\.0\.0/,
+  /:\d{4,5}\b/, // Port numbers like :3000, :8080
+];
+
+/**
+ * Literal sensitive substrings (no word boundary needed)
+ */
+const SENSITIVE_SUBSTRINGS = [
+  // System paths - these are clearly internal
+  '/var/',
+  '/usr/',
+  '/home/',
+  '/opt/',
+  'c:\\',
+  'd:\\',
+  'node_modules',
+  '/src/',
+  '/internal/',
 ];
 
 /**
@@ -46,8 +87,13 @@ export function containsSensitiveInfo(text: string): boolean {
 
   const lower = text.toLowerCase();
 
-  // Check for sensitive keywords
-  if (SENSITIVE_KEYWORDS.some(kw => lower.includes(kw.toLowerCase()))) {
+  // Check for literal substrings (paths, etc.)
+  if (SENSITIVE_SUBSTRINGS.some(sub => lower.includes(sub.toLowerCase()))) {
+    return true;
+  }
+
+  // Check for sensitive keyword patterns (with word boundaries)
+  if (SENSITIVE_KEYWORD_PATTERNS.some(pattern => pattern.test(text))) {
     return true;
   }
 
@@ -85,20 +131,43 @@ export function filterSensitiveData(
 }
 
 /**
+ * Type guard to check if error has AppError properties
+ */
+function hasAppErrorProps(
+  error: Error
+): error is Error & { code?: string | number; detail?: string } {
+  return 'code' in error || 'detail' in error;
+}
+
+/**
+ * Type guard to check if object has error-like properties
+ */
+function isErrorLikeObject(
+  obj: object
+): obj is { message?: unknown; error?: unknown; code?: unknown; detail?: unknown } {
+  return 'message' in obj || 'error' in obj || 'code' in obj;
+}
+
+/**
  * Normalize any error to AppError format
  * Note: Error properties are non-enumerable, so we explicitly copy them
  */
 export function normalizeError(error: unknown): AppError {
   if (error instanceof Error) {
-    const appError = error as AppError;
-    return {
+    const result: AppError = {
       name: error.name,
       message: error.message,
       stack: error.stack,
-      code: appError.code ?? 'UNKNOWN_ERROR',
-      detail: appError.detail,
+      code: 'UNKNOWN_ERROR',
       originalError: error,
-    } as AppError;
+    };
+
+    if (hasAppErrorProps(error)) {
+      result.code = error.code ?? 'UNKNOWN_ERROR';
+      result.detail = error.detail;
+    }
+
+    return result;
   }
 
   if (typeof error === 'string') {
@@ -110,12 +179,31 @@ export function normalizeError(error: unknown): AppError {
   }
 
   if (typeof error === 'object' && error !== null) {
-    const obj = error as Record<string, unknown>;
+    if (isErrorLikeObject(error)) {
+      const message =
+        typeof error.message === 'string'
+          ? error.message
+          : typeof error.error === 'string'
+            ? error.error
+            : 'Unknown error';
+
+      const code =
+        typeof error.code === 'string' || typeof error.code === 'number'
+          ? error.code
+          : 'UNKNOWN_ERROR';
+
+      return {
+        name: 'Error',
+        message,
+        code,
+        detail: typeof error.detail === 'string' ? error.detail : undefined,
+      } as AppError;
+    }
+
     return {
       name: 'Error',
-      message: String(obj.message ?? obj.error ?? 'Unknown error'),
-      code: obj.code ?? 'UNKNOWN_ERROR',
-      detail: typeof obj.detail === 'string' ? obj.detail : undefined,
+      message: 'Unknown error',
+      code: 'UNKNOWN_ERROR',
     } as AppError;
   }
 
@@ -215,12 +303,19 @@ export class ErrorHandler {
     const normalized = normalizeError(error);
     const errorCode = typeof normalized.code === 'number' ? normalized.code : 0;
 
+    // Safely extract request_id from error object
+    let requestId: string | undefined;
+    if (typeof error === 'object' && error !== null && 'request_id' in error) {
+      const rid = (error as { request_id: unknown }).request_id;
+      requestId = typeof rid === 'string' ? rid : undefined;
+    }
+
     return {
       message: normalized.message,
       userMessage: getUserFriendlyMessage(errorCode, this.messages, this.ranges),
       code: normalized.code,
       detail: filterSensitiveData(normalized.detail, this.isDev),
-      requestId: (error as Record<string, unknown>)?.request_id as string | undefined,
+      requestId,
       isRetryable: isRetryableError(errorCode, this.ranges),
     };
   }

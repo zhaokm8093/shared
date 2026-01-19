@@ -25,13 +25,24 @@ export class DuplicateRequestError extends Error {
   }
 }
 
+interface PendingEntry {
+  promise: Promise<unknown>;
+  startTime: number;
+}
+
 /**
  * 请求去重器
  */
 export class RequestDeduplicator {
-  private pending = new Map<string, Promise<unknown>>();
+  private pending = new Map<string, PendingEntry>();
   private completed = new Map<string, number>();
   private cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+  /** 请求超时时间(ms)，超时后会被清理 */
+  private readonly requestTimeout: number;
+
+  constructor(options?: { requestTimeout?: number }) {
+    this.requestTimeout = options?.requestTimeout ?? 30000; // 默认30秒
+  }
 
   /**
    * 排序对象的键（用于稳定的序列化）
@@ -42,18 +53,16 @@ export class RequestDeduplicator {
     }
 
     if (Array.isArray(obj)) {
-      return obj.map(item => this.sortObjectKeys(item));
+      return obj.map((item: unknown) => this.sortObjectKeys(item));
     }
 
-    return Object.keys(obj as Record<string, unknown>)
+    const record = obj as Record<string, unknown>;
+    return Object.keys(record)
       .sort()
-      .reduce(
-        (result, key) => {
-          result[key] = this.sortObjectKeys((obj as Record<string, unknown>)[key]);
-          return result;
-        },
-        {} as Record<string, unknown>
-      );
+      .reduce<Record<string, unknown>>((result, key) => {
+        result[key] = this.sortObjectKeys(record[key]);
+        return result;
+      }, {});
   }
 
   /**
@@ -80,14 +89,14 @@ export class RequestDeduplicator {
   async deduplicate<T>(key: string, requestFn: () => Promise<T>): Promise<T> {
     const existing = this.pending.get(key);
     if (existing) {
-      return existing as Promise<T>;
+      return existing.promise as Promise<T>;
     }
 
     const promise = requestFn().finally(() => {
       this.pending.delete(key);
     });
 
-    this.pending.set(key, promise);
+    this.pending.set(key, { promise, startTime: Date.now() });
     return promise;
   }
 
@@ -109,7 +118,7 @@ export class RequestDeduplicator {
     // 2. 检查是否进行中（去重）
     const existing = this.pending.get(key);
     if (existing) {
-      return existing as Promise<T>;
+      return existing.promise as Promise<T>;
     }
 
     // 3. 执行请求
@@ -126,18 +135,27 @@ export class RequestDeduplicator {
         throw error;
       });
 
-    this.pending.set(key, promise);
+    this.pending.set(key, { promise, startTime: now });
     return promise;
   }
 
   /**
-   * 清理过期的完成记录
+   * 清理过期的完成记录和卡住的请求
    */
   cleanup(maxAge: number = 10000): void {
     const now = Date.now();
+
+    // 清理完成记录
     for (const [key, completedTime] of this.completed.entries()) {
       if (now - completedTime > maxAge) {
         this.completed.delete(key);
+      }
+    }
+
+    // 清理卡住的 pending 请求（超过 requestTimeout）
+    for (const [key, entry] of this.pending.entries()) {
+      if (now - entry.startTime > this.requestTimeout) {
+        this.pending.delete(key);
       }
     }
   }
